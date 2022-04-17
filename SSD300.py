@@ -84,17 +84,17 @@ class PredictionBone(nn.Module):
                               padding=1)
         
         # class convolutions
-        self.cl1 = nn.Conv2d(self.convolution_filters[0], len(self.aspect_ratios[0]) * len(self.classes),
+        self.conf1 = nn.Conv2d(self.convolution_filters[0], len(self.aspect_ratios[0]) * len(self.classes),
                              kernel_size=(3, 3), padding=1)
-        self.cl2 = nn.Conv2d(self.convolution_filters[1], len(self.aspect_ratios[1]) * len(self.classes),
+        self.conf2 = nn.Conv2d(self.convolution_filters[1], len(self.aspect_ratios[1]) * len(self.classes),
                              kernel_size=(3, 3), padding=1)
-        self.cl3 = nn.Conv2d(self.convolution_filters[2], len(self.aspect_ratios[2]) * len(self.classes),
+        self.conf3 = nn.Conv2d(self.convolution_filters[2], len(self.aspect_ratios[2]) * len(self.classes),
                              kernel_size=(3, 3), padding=1)
-        self.cl4 = nn.Conv2d(self.convolution_filters[3], len(self.aspect_ratios[3]) * len(self.classes),
+        self.conf4 = nn.Conv2d(self.convolution_filters[3], len(self.aspect_ratios[3]) * len(self.classes),
                              kernel_size=(3, 3), padding=1)
-        self.cl5 = nn.Conv2d(self.convolution_filters[4], len(self.aspect_ratios[4]) * len(self.classes),
+        self.conf5 = nn.Conv2d(self.convolution_filters[4], len(self.aspect_ratios[4]) * len(self.classes),
                              kernel_size=(3, 3), padding=1)
-        self.cl6 = nn.Conv2d(self.convolution_filters[5], len(self.aspect_ratios[5]) * len(self.classes),
+        self.conf6 = nn.Conv2d(self.convolution_filters[5], len(self.aspect_ratios[5]) * len(self.classes),
                              kernel_size=(3, 3), padding=1)
     
     def forward(self, first, second, third, fourth, fifth, sixth):
@@ -117,27 +117,27 @@ class PredictionBone(nn.Module):
         sixthl = sixthl.permute(0, 2, 3, 1).contiguous().view(sixthl.size(0), -1, 4)
         
 
-        firstc = self.cl1(first)
+        firstc = self.conf1(first)
         firstc = nn.Softmax(dim=-1)(firstc.permute(0, 2, 3, 1).contiguous().view(firstc.size(0), -1,
                                                                                  len(self.classes)))
         
-        secondc = self.cl2(second)
+        secondc = self.conf2(second)
         secondc = nn.Softmax(dim=-1)(secondc.permute(0, 2, 3, 1).contiguous().view(secondc.size(0), -1,
                                                                                    len(self.classes)))
         
-        thirdc = self.cl3(third)
+        thirdc = self.conf3(third)
         thirdc = nn.Softmax(dim=-1)(thirdc.permute(0, 2, 3, 1).contiguous().view(thirdc.size(0), -1,
                                                                                  len(self.classes)))
         
-        fourthc = self.cl4(fourth)
+        fourthc = self.conf4(fourth)
         fourthc = nn.Softmax(dim=-1)(fourthc.permute(0, 2, 3, 1).contiguous().view(fourthc.size(0), -1,
                                                                                    len(self.classes)))
         
-        fifthc = self.cl5(fifth)
+        fifthc = self.conf5(fifth)
         fifthc = nn.Softmax(dim=-1)(fifthc.permute(0, 2, 3, 1).contiguous().view(fifthc.size(0), -1,
                                                                                  len(self.classes)))
         
-        sixthc = self.cl6(sixth)
+        sixthc = self.conf6(sixth)
         sixthc = nn.Softmax(dim=-1)(sixthc.permute(0, 2, 3, 1).contiguous().view(sixthc.size(0), -1,
                                                                                  len(self.classes)))
         
@@ -187,7 +187,8 @@ class SSD300(nn.Module):
                                           convolution_filters=self.convolution_filters, classes=self.classes)
 
     # def __detect(self, locations, confidence):
-    #     assert locations.shape[1:] == confidence.shape[1:]
+    #     print(locations.shape[:2], confidence.shape[:2])
+    #     assert locations.shape[:2] == confidence.shape[:2]
     #     boxes = []
     #     for element in range(locations.shape[0]):
     #         element_locations = locations[element]
@@ -206,9 +207,3 @@ class SSD300(nn.Module):
         locs, confs = self.predictbone(first, second, third, fourth, fifth, sixth)
         # boxes, probabilities = self.__detect(locs, confs)
         return locs, confs
-
-
-ssd = SSD300()
-test = ssd(torch.randn(1, 3, 300, 300))
-for i in test:
-    print(i.shape, i[0][0])
