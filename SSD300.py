@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # coding: utf-8
 
 # # Import
@@ -8,6 +7,69 @@ from torchvision.models import mobilenet_v2
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+
+
+# # Utils
+
+class Utils():
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def IoU(first, second):
+        l1, r1 = first[:2], first[2:]
+        l2, r2 = second[:2], second[2:]
+
+        x = 0
+        y = 1
+
+        # Area of 1st Rectangle
+        area1 = abs(l1[x] - r1[x]) * abs(l1[y] - r1[y])
+
+        # Area of 2nd Rectangle
+        area2 = abs(l2[x] - r2[x]) * abs(l2[y] - r2[y])
+
+        x_dist = (min(r1[x], r2[x]) -
+                  max(l1[x], l2[x]))
+
+        y_dist = (min(r1[y], r2[y]) -
+                  max(l1[y], l2[y]))
+        areaI = 0
+        if x_dist > 0 and y_dist > 0:
+            areaI = x_dist * y_dist
+        return areaI / (area1 + area2 - areaI)
+
+
+# # Loss
+
+class Multibox_Loss(nn.Module):
+    def __init__(self, alpha):
+        super(Multibox_Loss, self).__init__()
+
+        self.alpha = alpha
+        self.utils = Utils()
+
+    def forward(self, predict_boxes, predict_probabilities, true_boxes, true_probabilities):
+        print(len(predict_boxes), len(predict_probabilities), len(true_boxes), len(true_probabilities))
+        assert len(predict_boxes) == len(predict_probabilities) == len(true_boxes) == len(true_probabilities)
+        batch = len(predict_boxes)
+        res_loss = 0
+        for i in range(batch):
+            # print(predict_boxes[i].shape, predict_probabilities[i].shape, true_boxes[i].shape, true_probabilities[i].shape)
+            for j in range(len(predict_boxes[i])):
+                for l in range(len(true_boxes[i])):
+                    x1, y1, x2, y2 = predict_boxes[i][j]
+                    x3, y3, x4, y4 = true_boxes[i][l]
+                    intersection_of_union = self.utils.IoU((x1, y1, x2, y2), (x3, y3, x4, y4))
+                    if intersection_of_union < 0.5:
+                        res_loss += abs(predict_probabilities[i][j] - true_probabilities[i][l]) ** 0.1
+                    else:
+                        # print('Found', predict_boxes[i][j])
+                        res_loss += ((predict_boxes[i][j][0] + predict_boxes[i][j][2]) * 150 - (true_boxes[i][l][0] + true_boxes[i][l][2]) * 150) ** 2 * self.alpha
+                        res_loss += ((predict_boxes[i][j][1] + predict_boxes[i][j][3]) * 150 - (true_boxes[i][l][1] + true_boxes[i][l][3]) * 150) ** 2 * self.alpha
+                        res_loss += (abs(abs(predict_boxes[i][j][0] - predict_boxes[i][j][2]) - abs(true_boxes[i][l][0] - true_boxes[i][l][2])) * 300) ** 2 * self.alpha
+                        res_loss += (abs(abs(predict_boxes[i][j][1] - predict_boxes[i][j][3]) - abs(true_boxes[i][l][1] - true_boxes[i][l][3])) * 300) ** 2 * self.alpha
+        return res_loss
 
 
 # # Model
@@ -178,6 +240,14 @@ class SSD300(nn.Module):
             4: 256,
             5: 128,
         }
+        self.scales = {
+            0: 0.1,
+            1: 0.2,
+            2: 0.375,
+            3: 0.55,
+            4: 0.725,
+            5: 0.9,
+        }
         self.classes = ['head', 'background']
         
         # load models
@@ -186,16 +256,58 @@ class SSD300(nn.Module):
         self.predictbone = PredictionBone(aspect_ratios=self.aspect_ratios, sizes=self.sizes,
                                           convolution_filters=self.convolution_filters, classes=self.classes)
 
-    # def __detect(self, locations, confidence):
-    #     print(locations.shape[:2], confidence.shape[:2])
-    #     assert locations.shape[:2] == confidence.shape[:2]
-    #     boxes = []
-    #     for element in range(locations.shape[0]):
-    #         element_locations = locations[element]
-    #         for index_ratio in range(len(self.aspect_ratios[element])):
-    #             pass
-    #             # for i in
-    #     return boxes, confidence
+    def detect(self, locations, probabilities):
+        assert locations.shape[:2] == probabilities.shape[:2]
+        len_batch = (locations.shape[0] + probabilities.shape[0]) // 2
+        res_boxes = []
+        res_probabilities = []
+        res_labels = []
+        probabilities, labels = probabilities.max(dim=-1)
+        # print(locations.shape, probabilities.shape, labels.shape)
+        for index in range(len_batch):
+            element_locations = locations[index]
+            element_probabilities = probabilities[index]
+            element_labels = labels[index]
+            res_element_boxes = []
+            res_element_probabilities = []
+            res_element_labels = []
+            for jndex in range(6):
+                height, width = self.sizes[jndex]
+                size = len(self.aspect_ratios[jndex]) * height * width
+                channels_locations = len(self.aspect_ratios[jndex]) * 4
+                channels_probabilities = len(self.aspect_ratios[jndex])
+                channels_labels = channels_probabilities
+                congress_locations = element_locations[:size].reshape(height, width, channels_locations)
+                congress_probabilities = element_probabilities[:size].reshape(height, width, channels_probabilities)
+                congress_labels = element_labels[:size].reshape(height, width, channels_labels)
+                element_locations = element_locations[size:]
+                element_probabilities = element_probabilities[size:]
+                element_labels = element_labels[size:]
+                # print(congress_locations.shape)
+                for i in range(height):
+                    for j in range(width):
+                        frst, snd, thrd, frth = congress_locations[i][j][:channels_locations // 4], \
+                                     congress_locations[i][j][channels_locations // 4:channels_locations // 4 * 2],\
+                                     congress_locations[i][j][channels_locations // 4 * 2:channels_locations // 4 * 3],\
+                                     congress_locations[i][j][channels_locations // 4 * 3:channels_locations // 4 * 4]
+                        packs = tuple(zip(frst, snd, thrd, frth, congress_labels[i][j]))
+                        for andex in range(len(self.aspect_ratios[jndex])):
+                            x, y, w, h, cls = packs[andex]
+                            if cls == 0:
+                                continue
+                            # print(x, y, w, h, cls)
+                            cx = (j + 0.5 + x) / width
+                            cy = (i + 0.5 + y) / height
+                            cw = self.scales[jndex] * (self.aspect_ratios[jndex][andex]) ** 0.5
+                            ch = self.scales[jndex] / (self.aspect_ratios[jndex][andex]) ** 0.5
+                            res_element_boxes.append((cx, cy, cw + (self.scales[jndex] / 2 * w), ch + (self.scales[jndex] / 2 * h)))
+                            res_element_probabilities.append([congress_probabilities[i][j][andex]])
+                            res_element_labels.append([congress_labels[i][j][andex]])
+            res_boxes.append(torch.Tensor(res_element_boxes))
+            res_probabilities.append(torch.Tensor(res_element_probabilities))
+            res_labels.append(torch.Tensor(res_element_labels))
+
+        return res_boxes, res_probabilities, res_labels
         
     def forward(self, x):
         assert self.input_shape[1:] == x.shape[1:]
@@ -205,5 +317,6 @@ class SSD300(nn.Module):
         fourth, fifth, sixth = self.auxbone(third)
         # return locations and confs N, 9700, 4 and N, 9700, len(classes)
         locs, confs = self.predictbone(first, second, third, fourth, fifth, sixth)
-        # boxes, probabilities = self.__detect(locs, confs)
-        return locs, confs
+        boxes, probabilities, labels = self.detect(locs, confs)
+        return boxes, probabilities, labels
+        # return locs, confs
