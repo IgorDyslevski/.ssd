@@ -4,82 +4,10 @@
 
 from torch import nn
 from torchvision.models import mobilenet_v2
-from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import CrossEntropyLoss, MSELoss, SmoothL1Loss
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-
-
-# # Utils
-
-class Utils():
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def IoU(first, second):
-        l1, r1 = first[:2], first[2:]
-        l2, r2 = second[:2], second[2:]
-
-        x = 0
-        y = 1
-
-        # Area of 1st Rectangle
-        area1 = abs(l1[x] - r1[x]) * abs(l1[y] - r1[y])
-
-        # Area of 2nd Rectangle
-        area2 = abs(l2[x] - r2[x]) * abs(l2[y] - r2[y])
-
-        x_dist = (min(r1[x], r2[x]) -
-                  max(l1[x], l2[x]))
-
-        y_dist = (min(r1[y], r2[y]) -
-                  max(l1[y], l2[y]))
-        areaI = 0
-        if x_dist > 0 and y_dist > 0:
-            areaI = x_dist * y_dist
-        return areaI / (area1 + area2 - areaI)
-
-
-# # Loss
-
-class Multibox_Loss(nn.Module):
-    def __init__(self, alpha):
-        super(Multibox_Loss, self).__init__()
-
-        self.alpha = alpha
-        self.utils = Utils()
-
-    def forward(self, predict_boxes, predict_probabilities, true_boxes, true_classes):
-        print(predict_boxes.shape, predict_probabilities.shape, true_boxes.shape, true_classes.shape)
-        assert predict_boxes.shape[:-1] == predict_probabilities.shape[:-1] \
-               and true_boxes.shape[:-1] == true_classes.shape[:-1] \
-               and predict_boxes.shape[-1] == true_boxes.shape[-1] \
-               and predict_probabilities.shape[-1] == true_classes.shape[-1]
-        # N
-        batch = len(predict_boxes)
-        wall_probability = torch.zeros(predict_probabilities.shape[-1])
-        wall_probability[0] = 1
-        conf = CrossEntropyLoss()
-        loc = MSELoss()
-        conf_loss = 0
-        loc_loss = 0
-        for i in range(batch):
-            for j in range(len(predict_boxes[i])):
-                for l in range(len(true_boxes[i])):
-                    x1, y1, w1, h1 = predict_boxes[i][j]
-                    x2, y2, w2, h2 = true_boxes[i][l]
-                    x11, y11, x12, y12 = x1 - w1 / 2, y1 - h1 / 2, x1 + w1 / 2, y1 + h1 / 2
-                    x21, y21, x22, y22 = x2 - w2 / 2, y2 - h2 / 2, x2 + w2 / 2, y2 + h2 / 2
-                    intersection_of_union = self.utils.IoU((x11, y11, x12, y12), (x21, y21, x22, y22))
-                    if intersection_of_union < 0.5:
-                        conf_loss += conf(predict_probabilities[i][j][None, ...], wall_probability[None, ...])
-                    else:
-                        print('Found', predict_boxes[i][j])
-                        loc_loss += loc(predict_boxes[i][j][None, ...] * 300, true_boxes[i][l][None, ...] * 300) * self.alpha
-                        conf_loss += conf(predict_probabilities[i][j][None, ...], true_classes[i][l][None, ...])
-        print(loc_loss, conf_loss)
-        return loc_loss + conf_loss
 
 
 # # Model
