@@ -4,6 +4,7 @@
 
 from torch import nn
 from torchvision.models import mobilenet_v2
+from torch.nn import CrossEntropyLoss, MSELoss
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -49,27 +50,36 @@ class Multibox_Loss(nn.Module):
         self.alpha = alpha
         self.utils = Utils()
 
-    def forward(self, predict_boxes, predict_probabilities, true_boxes, true_probabilities):
-        print(len(predict_boxes), len(predict_probabilities), len(true_boxes), len(true_probabilities))
-        assert len(predict_boxes) == len(predict_probabilities) == len(true_boxes) == len(true_probabilities)
+    def forward(self, predict_boxes, predict_probabilities, true_boxes, true_classes):
+        print(predict_boxes.shape, predict_probabilities.shape, true_boxes.shape, true_classes.shape)
+        assert predict_boxes.shape[:-1] == predict_probabilities.shape[:-1] \
+               and true_boxes.shape[:-1] == true_classes.shape[:-1] \
+               and predict_boxes.shape[-1] == true_boxes.shape[-1] \
+               and predict_probabilities.shape[-1] == true_classes.shape[-1]
+        # N
         batch = len(predict_boxes)
-        res_loss = 0
+        wall_probability = torch.zeros(predict_probabilities.shape[-1])
+        wall_probability[0] = 1
+        conf = CrossEntropyLoss()
+        loc = MSELoss()
+        conf_loss = 0
+        loc_loss = 0
         for i in range(batch):
-            # print(predict_boxes[i].shape, predict_probabilities[i].shape, true_boxes[i].shape, true_probabilities[i].shape)
             for j in range(len(predict_boxes[i])):
                 for l in range(len(true_boxes[i])):
-                    x1, y1, x2, y2 = predict_boxes[i][j]
-                    x3, y3, x4, y4 = true_boxes[i][l]
-                    intersection_of_union = self.utils.IoU((x1, y1, x2, y2), (x3, y3, x4, y4))
+                    x1, y1, w1, h1 = predict_boxes[i][j]
+                    x2, y2, w2, h2 = true_boxes[i][l]
+                    x11, y11, x12, y12 = x1 - w1 / 2, y1 - h1 / 2, x1 + w1 / 2, y1 + h1 / 2
+                    x21, y21, x22, y22 = x2 - w2 / 2, y2 - h2 / 2, x2 + w2 / 2, y2 + h2 / 2
+                    intersection_of_union = self.utils.IoU((x11, y11, x12, y12), (x21, y21, x22, y22))
                     if intersection_of_union < 0.5:
-                        res_loss += abs(predict_probabilities[i][j] - true_probabilities[i][l]) ** 0.1
+                        conf_loss += conf(predict_probabilities[i][j][None, ...], wall_probability[None, ...])
                     else:
-                        # print('Found', predict_boxes[i][j])
-                        res_loss += ((predict_boxes[i][j][0] + predict_boxes[i][j][2]) * 150 - (true_boxes[i][l][0] + true_boxes[i][l][2]) * 150) ** 2 * self.alpha
-                        res_loss += ((predict_boxes[i][j][1] + predict_boxes[i][j][3]) * 150 - (true_boxes[i][l][1] + true_boxes[i][l][3]) * 150) ** 2 * self.alpha
-                        res_loss += (abs(abs(predict_boxes[i][j][0] - predict_boxes[i][j][2]) - abs(true_boxes[i][l][0] - true_boxes[i][l][2])) * 300) ** 2 * self.alpha
-                        res_loss += (abs(abs(predict_boxes[i][j][1] - predict_boxes[i][j][3]) - abs(true_boxes[i][l][1] - true_boxes[i][l][3])) * 300) ** 2 * self.alpha
-        return res_loss
+                        print('Found', predict_boxes[i][j])
+                        loc_loss += loc(predict_boxes[i][j][None, ...] * 300, true_boxes[i][l][None, ...] * 300) * self.alpha
+                        conf_loss += conf(predict_probabilities[i][j][None, ...], true_classes[i][l][None, ...])
+        print(loc_loss, conf_loss)
+        return loc_loss + conf_loss
 
 
 # # Model
@@ -132,17 +142,31 @@ class PredictionBone(nn.Module):
                                                                                  convolution_filters, classes
         
         # location convolutions
-        self.loc1 = nn.Conv2d(self.convolution_filters[0], len(self.aspect_ratios[0]) * 4, kernel_size=(3, 3),
+        self.loc1 = nn.Conv2d(self.convolution_filters[0], len(self.aspect_ratios[0]) * 2, kernel_size=(3, 3),
                               padding=1)
-        self.loc2 = nn.Conv2d(self.convolution_filters[1], len(self.aspect_ratios[1]) * 4, kernel_size=(3, 3),
+        self.loc2 = nn.Conv2d(self.convolution_filters[1], len(self.aspect_ratios[1]) * 2, kernel_size=(3, 3),
                               padding=1)
-        self.loc3 = nn.Conv2d(self.convolution_filters[2], len(self.aspect_ratios[2]) * 4, kernel_size=(3, 3),
+        self.loc3 = nn.Conv2d(self.convolution_filters[2], len(self.aspect_ratios[2]) * 2, kernel_size=(3, 3),
                               padding=1)
-        self.loc4 = nn.Conv2d(self.convolution_filters[3], len(self.aspect_ratios[3]) * 4, kernel_size=(3, 3),
+        self.loc4 = nn.Conv2d(self.convolution_filters[3], len(self.aspect_ratios[3]) * 2, kernel_size=(3, 3),
                               padding=1)
-        self.loc5 = nn.Conv2d(self.convolution_filters[4], len(self.aspect_ratios[4]) * 4, kernel_size=(3, 3),
+        self.loc5 = nn.Conv2d(self.convolution_filters[4], len(self.aspect_ratios[4]) * 2, kernel_size=(3, 3),
                               padding=1)
-        self.loc6 = nn.Conv2d(self.convolution_filters[5], len(self.aspect_ratios[5]) * 4, kernel_size=(3, 3),
+        self.loc6 = nn.Conv2d(self.convolution_filters[5], len(self.aspect_ratios[5]) * 2, kernel_size=(3, 3),
+                              padding=1)
+
+        # location convolutions
+        self.size1 = nn.Conv2d(self.convolution_filters[0], len(self.aspect_ratios[0]) * 2, kernel_size=(3, 3),
+                              padding=1)
+        self.size2 = nn.Conv2d(self.convolution_filters[1], len(self.aspect_ratios[1]) * 2, kernel_size=(3, 3),
+                              padding=1)
+        self.size3 = nn.Conv2d(self.convolution_filters[2], len(self.aspect_ratios[2]) * 2, kernel_size=(3, 3),
+                              padding=1)
+        self.size4 = nn.Conv2d(self.convolution_filters[3], len(self.aspect_ratios[3]) * 2, kernel_size=(3, 3),
+                              padding=1)
+        self.size5 = nn.Conv2d(self.convolution_filters[4], len(self.aspect_ratios[4]) * 2, kernel_size=(3, 3),
+                              padding=1)
+        self.size6 = nn.Conv2d(self.convolution_filters[5], len(self.aspect_ratios[5]) * 2, kernel_size=(3, 3),
                               padding=1)
         
         # class convolutions
@@ -161,22 +185,41 @@ class PredictionBone(nn.Module):
     
     def forward(self, first, second, third, fourth, fifth, sixth):
         firstl = nn.Tanh()(self.loc1(first))
-        firstl = firstl.permute(0, 2, 3, 1).contiguous().view(firstl.size(0), -1, 4)
+        firstl = firstl.permute(0, 2, 3, 1).contiguous().view(firstl.size(0), -1, 2)
         
         secondl = nn.Tanh()(self.loc2(second))
-        secondl = secondl.permute(0, 2, 3, 1).contiguous().view(secondl.size(0), -1, 4)
+        secondl = secondl.permute(0, 2, 3, 1).contiguous().view(secondl.size(0), -1, 2)
         
         thirdl = nn.Tanh()(self.loc3(third))
-        thirdl = thirdl.permute(0, 2, 3, 1).contiguous().view(thirdl.size(0), -1, 4)
+        thirdl = thirdl.permute(0, 2, 3, 1).contiguous().view(thirdl.size(0), -1, 2)
         
         fourthl = nn.Tanh()(self.loc4(fourth))
-        fourthl = fourthl.permute(0, 2, 3, 1).contiguous().view(fourthl.size(0), -1, 4)
+        fourthl = fourthl.permute(0, 2, 3, 1).contiguous().view(fourthl.size(0), -1, 2)
         
         fifthl = nn.Tanh()(self.loc5(fifth))
-        fifthl = fifthl.permute(0, 2, 3, 1).contiguous().view(fifthl.size(0), -1, 4)
+        fifthl = fifthl.permute(0, 2, 3, 1).contiguous().view(fifthl.size(0), -1, 2)
         
         sixthl = nn.Tanh()(self.loc6(sixth))
-        sixthl = sixthl.permute(0, 2, 3, 1).contiguous().view(sixthl.size(0), -1, 4)
+        sixthl = sixthl.permute(0, 2, 3, 1).contiguous().view(sixthl.size(0), -1, 2)
+
+
+        firsts = nn.Sigmoid()(self.size1(first))
+        firsts = firsts.permute(0, 2, 3, 1).contiguous().view(firsts.size(0), -1, 2)
+
+        seconds = nn.Sigmoid()(self.size2(second))
+        seconds = seconds.permute(0, 2, 3, 1).contiguous().view(seconds.size(0), -1, 2)
+
+        thirds = nn.Sigmoid()(self.size3(third))
+        thirds = thirds.permute(0, 2, 3, 1).contiguous().view(thirds.size(0), -1, 2)
+
+        fourths = nn.Sigmoid()(self.size4(fourth))
+        fourths = fourths.permute(0, 2, 3, 1).contiguous().view(fourths.size(0), -1, 2)
+
+        fifths = nn.Sigmoid()(self.size5(fifth))
+        fifths = fifths.permute(0, 2, 3, 1).contiguous().view(fifths.size(0), -1, 2)
+
+        sixths = nn.Sigmoid()(self.size6(sixth))
+        sixths = sixths.permute(0, 2, 3, 1).contiguous().view(sixths.size(0), -1, 2)
         
 
         firstc = self.conf1(first)
@@ -204,7 +247,9 @@ class PredictionBone(nn.Module):
                                                                                  len(self.classes)))
         
         
-        locs = torch.cat((firstl, secondl, thirdl, fourthl, fifthl, sixthl), 1)
+        points = torch.cat((firstl, secondl, thirdl, fourthl, fifthl, sixthl), 1)
+        sizes = torch.cat((firsts, seconds, thirds, fourths, fifths, sixths), 1)
+        locs = torch.cat((points, sizes), -1)
         confs = torch.cat((firstc, secondc, thirdc, fourthc, fifthc, sixthc), 1)
         
         return locs, confs
@@ -257,57 +302,76 @@ class SSD300(nn.Module):
                                           convolution_filters=self.convolution_filters, classes=self.classes)
 
     def detect(self, locations, probabilities):
+        #      N, 6792, 4             N, 6792, 2
         assert locations.shape[:2] == probabilities.shape[:2]
-        len_batch = (locations.shape[0] + probabilities.shape[0]) // 2
-        res_boxes = []
-        res_probabilities = []
-        res_labels = []
-        probabilities, labels = probabilities.max(dim=-1)
-        # print(locations.shape, probabilities.shape, labels.shape)
-        for index in range(len_batch):
-            element_locations = locations[index]
-            element_probabilities = probabilities[index]
-            element_labels = labels[index]
+        points = locations[:, :, :2] # shape: N, 6792, 2
+        sizes = locations[:, :, 2:] # shape: N, 6792, 2
+        len_batch = locations.shape[0] # shape: N
+        boxes = []
+        for batch in range(len_batch):
+            element_points = points[batch] # 6792, 2
+            element_sizes = sizes[batch] # 6792, 2
             res_element_boxes = []
-            res_element_probabilities = []
-            res_element_labels = []
-            for jndex in range(6):
-                height, width = self.sizes[jndex]
-                size = len(self.aspect_ratios[jndex]) * height * width
-                channels_locations = len(self.aspect_ratios[jndex]) * 4
-                channels_probabilities = len(self.aspect_ratios[jndex])
-                channels_labels = channels_probabilities
-                congress_locations = element_locations[:size].reshape(height, width, channels_locations)
-                congress_probabilities = element_probabilities[:size].reshape(height, width, channels_probabilities)
-                congress_labels = element_labels[:size].reshape(height, width, channels_labels)
-                element_locations = element_locations[size:]
-                element_probabilities = element_probabilities[size:]
-                element_labels = element_labels[size:]
-                # print(congress_locations.shape)
-                for i in range(height):
-                    for j in range(width):
-                        frst, snd, thrd, frth = congress_locations[i][j][:channels_locations // 4], \
-                                     congress_locations[i][j][channels_locations // 4:channels_locations // 4 * 2],\
-                                     congress_locations[i][j][channels_locations // 4 * 2:channels_locations // 4 * 3],\
-                                     congress_locations[i][j][channels_locations // 4 * 3:channels_locations // 4 * 4]
-                        packs = tuple(zip(frst, snd, thrd, frth, congress_labels[i][j]))
-                        for andex in range(len(self.aspect_ratios[jndex])):
-                            x, y, w, h, cls = packs[andex]
-                            if cls == 0:
-                                continue
-                            # print(x, y, w, h, cls)
-                            cx = (j + 0.5 + x) / width
-                            cy = (i + 0.5 + y) / height
-                            cw = self.scales[jndex] * (self.aspect_ratios[jndex][andex]) ** 0.5
-                            ch = self.scales[jndex] / (self.aspect_ratios[jndex][andex]) ** 0.5
-                            res_element_boxes.append((cx, cy, cw + (self.scales[jndex] / 2 * w), ch + (self.scales[jndex] / 2 * h)))
-                            res_element_probabilities.append([congress_probabilities[i][j][andex]])
-                            res_element_labels.append([congress_labels[i][j][andex]])
-            res_boxes.append(torch.Tensor(res_element_boxes))
-            res_probabilities.append(torch.Tensor(res_element_probabilities))
-            res_labels.append(torch.Tensor(res_element_labels))
+            for congress in range(6):
+                '''
+                height, width (pairs):
+                    38 38
+                    19 19
+                    10 10
+                    5 5
+                    3 3
+                    1 1
+                '''
+                height, width = self.sizes[congress]
+                '''
+                sizes (scalars):
+                    4332
+                    1805
+                    500
+                    125
+                    27
+                    3
+                '''
+                size = len(self.aspect_ratios[congress]) * height * width
+                '''
+                scales (scalars):
+                    0.1
+                    0.2
+                    0.375
+                    0.55
+                    0.725
+                    0.9
+                '''
+                scale = self.scales[congress]
+                '''
+                channels_lens (scalars):
+                    3
+                    5
+                    5
+                    5
+                    3
+                    3
+                '''
+                channels_len = len(self.aspect_ratios[congress])
+                # shape: size, 2
+                congress_points = element_points[:size]
+                # shape: size, 2
+                congress_sizes = element_sizes[:size]
 
-        return res_boxes, res_probabilities, res_labels
+                for channel in range(channels_len):
+                    for y in range(height):
+                        for x in range(width):
+                            index = (y * height + x) + (height * height) * channel
+                            cx, cy = congress_points[index]
+                            cw, ch = congress_sizes[index]
+                            cx = (x + 0.5 + cx) / width
+                            cy = (y + 0.5 + cy) / height
+                            cw = scale * ((self.aspect_ratios[congress][channel] * cw) ** 0.5)
+                            ch = scale / ((self.aspect_ratios[congress][channel] * ch) ** 0.5)
+                            res_element_boxes.append((cx, cy, cw, ch))
+            boxes.append(res_element_boxes)
+
+        return torch.Tensor(boxes), probabilities
         
     def forward(self, x):
         assert self.input_shape[1:] == x.shape[1:]
@@ -317,6 +381,5 @@ class SSD300(nn.Module):
         fourth, fifth, sixth = self.auxbone(third)
         # return locations and confs N, 9700, 4 and N, 9700, len(classes)
         locs, confs = self.predictbone(first, second, third, fourth, fifth, sixth)
-        boxes, probabilities, labels = self.detect(locs, confs)
-        return boxes, probabilities, labels
-        # return locs, confs
+        boxes, probabilities = self.detect(locs, confs)
+        return boxes, probabilities
